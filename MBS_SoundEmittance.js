@@ -1,7 +1,7 @@
 //=============================================================================
-// MBS - Sound Emittance (v1.2.1)
+// MBS - Sound Emittance (v1.6.1)
 //-----------------------------------------------------------------------------
-// by Masked
+// by Masked (Edited by OM-Devv)
 //=============================================================================
 //-----------------------------------------------------------------------------
 // Especificações do plugin (Não Modifique!)
@@ -10,25 +10,47 @@
 /*:
 @author Masked
 
-@plugindesc Allows you to set an sound emittance for events with 3d positioning
-and distance.
+@plugindesc Allows you to set a sound emittance for events with smooth, interpolated 8-directional 3D positioning.
 <MBS SEmittance>
 
 @param Use HRTF
-@desc Choose whether to use HRTF panning model for the 3D  sound positioning
-or not (RPG Maker uses equalpower by default).
+@desc Choose whether to use HRTF panning model for the 3D sound positioning. HRTF provides more realistic 3D sound.
+@type boolean
 @default true
 
 @param 3D Sound
-@desc Determines whether to use tridimensional sound positioning or not.
+@desc Determines whether to use tridimensional sound positioning or not. If false, only volume changes with distance.
+@type boolean
 @default true
+
+@param Mono Sound
+@desc Forces all game audio to be mono. Useful for accessibility or specific audio setups.
+@type boolean
+@default false
+
+@param Audio Smoothing
+@desc Controls the smoothness of position and volume transitions. 0.1 is very smooth, 1.0 is instant.
+@type number
+@decimals 2
+@min 0.01
+@max 1
+@default 0.15
 
 @help
 ===========================================================================
-Introduction
+Introduction (v1.6.1)
 ===========================================================================
-Allows you to set an sound emission for an event so that the sound 3D 
-position and volume change as the player moves.
+This plugin allows you to set a sound emission for an event. As the player
+moves and turns, the sound's 3D position and volume will change relative
+to the player's position and orientation.
+
+This version introduces a smoothing (interpolation) system. Instead of
+instantly snapping to new positions and volumes when the player turns,
+the audio will now transition smoothly. This eliminates harsh audio "cuts"
+and creates a far more natural and immersive experience. The amount of
+smoothing can be configured in the plugin parameters.
+
+The plugin supports full 8-directional movement, with accurate panning.
 
 ===========================================================================
 How to use
@@ -55,33 +77,54 @@ E.g.:
 <s_e_volume: 90>
 <s_e_pitch: 50>
 
-The radius is measured in tiles (48x48 px), it's possible to use float 
-values. If no radius is given, it will be assumed it's 1.
+The radius is measured in tiles (48x48 px), you can use float values.
+If no radius is given, it will be assumed it's 1.
 
 */
 /*:pt
 @author Masked
 
-@plugindesc Permite definir uma emissão de som para eventos com posição e 
-distância.
+@plugindesc Permite definir uma emissão de som para eventos com posicionamento 3D suave e interpolado de 8 direções.
 <MBS SEmittance>
 
 @param Use HRTF
-@desc Determina quando usar HRTF para o posicionamento 3D do som ou não.
-(O RPG Maker usa equalpower por padrão).
+@desc Determina quando usar HRTF para o posicionamento 3D do som. HRTF provê um som 3D mais realista.
+@type boolean
 @default true
 
 @param 3D Sound
-@desc Determina usar posicionamento 3D para o som ou não.
-@param true
+@desc Determina usar posicionamento 3D para o som ou não. Se falso, apenas o volume muda com a distância.
+@type boolean
+@default true
+
+@param Som Mono
+@desc Força todo o áudio do jogo a ser mono. Útil para acessibilidade.
+@type boolean
+@default false
+
+@param Suavização de Áudio
+@desc Controla a suavidade das transições de posição e volume. 0.1 é muito suave, 1.0 é instantâneo.
+@type number
+@decimals 2
+@min 0.01
+@max 1
+@default 0.15
 
 @help
 ===========================================================================
-Introdução
+Introdução (v1.6.1)
 ===========================================================================
-Permite que você escolha um efeito sonoro para ser emitido por um evento,
-dessa forma conforme o jogador se mover a posição de volume do som se 
-alteram de acordo com a distância do evento.
+Este plugin permite que você defina uma emissão de som para um evento.
+Conforme o jogador se move e vira, a posição 3D e o volume do som
+mudarão em relação à posição e orientação do jogador.
+
+Esta versão introduz um sistema de suavização (interpolação). Em vez de
+mudar instantaneamente para novas posições e volumes quando o jogador vira,
+o áudio agora fará uma transição suave. Isso elimina "cortes" de áudio
+bruscos e cria uma experiência muito mais natural e imersiva. A quantidade
+de suavização pode ser configurada nos parâmetros do plugin.
+
+O plugin suporta movimento completo de 8 direções, com áudio preciso.
 
 ===========================================================================
 Como usar
@@ -128,13 +171,15 @@ MBS.SoundEmittance = {};
  	//-----------------------------------------------------------------------------
 	// Settings
 	//
-
-	$.Param.useHRTF = !!$.Parameters['Use HRTF'].match(/true/i);
-	$.Param.use3D   = !!$.Parameters['3D Sound'].match(/true/i);
+	$.Param.useHRTF = JSON.parse($.Parameters['Use HRTF'] || 'true');
+	$.Param.use3D = JSON.parse($.Parameters['3D Sound'] || 'true');
+	$.Param.useMono = JSON.parse($.Parameters['Mono Sound'] || 'false');
+	$.Param.smoothingFactor = parseFloat($.Parameters['Audio Smoothing'] || 0.15);
 
  	//-----------------------------------------------------------------------------
 	// Module Functions
 	//
+	const lerp = (start, end, amount) => start + (end - start) * amount;
 
 	function audioFilename(filename) {
 		var ext = AudioManager.audioFileExt();
@@ -143,17 +188,52 @@ MBS.SoundEmittance = {};
 			return filename + ext;
 		return filename + '.m4a';
 	}
+	
+	$.getPlayerAngle = function() {
+        const dir8 = Input.dir8;
+        if (dir8 > 0) {
+            switch (dir8) {
+                case 8: return 0;
+                case 9: return Math.PI / 4;
+                case 6: return Math.PI / 2;
+                case 3: return 3 * Math.PI / 4;
+                case 2: return Math.PI;
+                case 1: return 5 * Math.PI / 4;
+                case 4: return 3 * Math.PI / 2;
+                case 7: return 7 * Math.PI / 4;
+            }
+        }
+		switch ($gamePlayer.direction()) {
+            case 8: return 0;
+            case 6: return Math.PI / 2;
+            case 2: return Math.PI;
+            case 4: return 3 * Math.PI / 2;
+        }
+        return 0;
+	};
 
+    $.transformCoordinates = function(deltaX, deltaY, playerAngleRad) {
+        const cos = Math.cos(playerAngleRad);
+        const sin = Math.sin(playerAngleRad);
+        const pannerX = deltaX * cos + deltaY * sin;
+        const pannerZ = deltaX * sin - deltaY * cos;
+        return { x: pannerX, z: pannerZ };
+    };
 
 	//-----------------------------------------------------------------------------
 	// WebAudio
 	//
-	// Makes some changes to allow 3D sound positioning
-
-	// Aliases
+	var _WebAudio_initialize_old = WebAudio.initialize;
 	var WebAudio_clear_old = WebAudio.prototype.clear;
 
-	// Sets WebAudio 'position' property
+	WebAudio.initialize = function() {
+		var result = _WebAudio_initialize_old.apply(this, arguments);
+		if (result && this._context && MBS.SoundEmittance.Param.useMono) {
+			this._context.destination.channelCount = 1;
+		}
+		return result;
+	};
+
 	Object.defineProperty(WebAudio.prototype, 'position', {
 		get: function() {
 			return this._position;
@@ -161,32 +241,27 @@ MBS.SoundEmittance = {};
 		set: function(value) {
 			this._position = value;
 			if (this._pannerNode)
-	        	this._pannerNode.setPosition((this._position[0] || 0), this._position[2] || 0, (this._position[1] || 0));
+	        	this._pannerNode.setPosition(this._position[0] || 0, this._position[1] || 0, this._position[2] || 0);
 		}
 	});
 
-	// Setups the initial values for the WebAudio instance
-	// > Added initial position
 	WebAudio.prototype.clear = function() {
 	    WebAudio_clear_old.apply(this, arguments)
-	    this._position = [0, 0];
+	    this._position = [0, 0, 0];
 	};
 
-	// Updates the WebAudio instance panner to allow 3d positioning
-	// > Changed almost everything here
 	WebAudio.prototype._updatePanner = function() {
 	    if (this._pannerNode) {
 	    	this._pannerNode.distanceModel = 'linear';
-	    	if ($.Param.useHRTF)
-	    		this._pannerNode.panningModel = 'HRTF';
-	    	this._pannerNode.setOrientation(0,0,0);
+	    	if ($.Param.useHRTF) {
+				this._pannerNode.panningModel = 'HRTF';
+			}
 	    }
 	};
 
 	//-----------------------------------------------------------------------------
 	// Game_SoundEmittance
 	//
-	var $gameSoundEmittances = [];
 	var $_soundEmittances = [];
 
 	function Game_SoundEmittance() {
@@ -200,7 +275,7 @@ MBS.SoundEmittance = {};
 		this.playing = false;
 		this.playParameters = [];
 		this.maxDistance = 1;
-		this.position = [0, 0];
+		this.rawPosition = [0, 0];
 	}
 
 	Game_SoundEmittance.prototype.play = function() {
@@ -216,66 +291,62 @@ MBS.SoundEmittance = {};
 	//-----------------------------------------------------------------------------
 	// Game_Event
 	//
-
-	// Aliases
 	var Game_Event_update_old = Game_Event.prototype.update;
 	var Game_Event_refresh_old = Game_Event.prototype.refresh;
 	var Game_Event_setupPage_old = Game_Event.prototype.setupPage;
 
-	// Event page setup
-	// > Added call to sound emittance setup
 	Game_Event.prototype.setupPage = function() {
 	    Game_Event_setupPage_old.apply(this, arguments);
 	    this.setupSEmittance();
 	};
 
-	// Setups the sound emittance for the event
 	Game_Event.prototype.setupSEmittance = function() {
-		if (this._sEmittance)
-			this._sEmittance.stop();
+		if (this._sEmittance) this._sEmittance.stop();
 
+		this._sEmittance = null;
 		if (!this.page()) return;
 
 		var list = this.list();
-
 		var comments = "";
-		list.forEach(function (command) {
-			if (command.code == 108 || command.code == 408) {
+		for (const command of list) {
+			if (command.code === 108 || command.code === 408) {
 				comments += command.parameters[0] + "\n";
 			}
-		});
+		}
 
-		var filename = (/\s*<\s*s_emittance\s*:\s*(.+)\s*>\s*/i.exec(comments) || [])[1];
-		if (filename != undefined)
+		const filename = (/\s*<\s*s_emittance\s*:\s*(.+)\s*>\s*/i.exec(comments) || [])[1];
+		if (filename) {
 			this._sEmittance = new Game_SoundEmittance(audioFilename(AudioManager._path + filename));
+		} else {
+			return;
+		}
 
-		var radius = (/\s*<\s*s_e_radius\s*:\s*(\d+(\.\d+)?)\s*>\s*/i.exec(comments) || [])[1];
-		this._sEmittanceRadius = radius || 1;
+		const radius = (/\s*<\s*s_e_radius\s*:\s*(\d+(\.\d+)?)\s*>\s*/i.exec(comments) || [])[1];
+		this._sEmittanceRadius = parseFloat(radius || 1);
 
-		var volume = (/\s*<\s*s_e_volume\s*:\s*(\d+)\s*>\s*/i.exec(comments) || [])[1];
-		if (volume && this._sEmittance)
-			this._sEmittance.volume = volume / 100;
+		const volume = (/\s*<\s*s_e_volume\s*:\s*(\d+)\s*>\s*/i.exec(comments) || [])[1];
+		if (volume && this._sEmittance) {
+			this._sEmittance.volume = parseInt(volume) / 100;
+		}
 
-		var pitch = (/\s*<\s*s_e_pitch\s*:\s*(\d+)\s*>\s*/i.exec(comments) || [])[1];
-		if (pitch && this._sEmittance)
-			this._sEmittance.pitch = pitch / 100;
+		const pitch = (/\s*<\s*s_e_pitch\s*:\s*(\d+)\s*>\s*/i.exec(comments) || [])[1];
+		if (pitch && this._sEmittance) {
+			this._sEmittance.pitch = parseInt(pitch) / 100;
+		}
 	};
 
-	// Event update process
-	// > Added call to sound emittance update
 	Game_Event.prototype.update = function() {
 	    Game_Event_update_old.apply(this, arguments);
 	    this.updateSEmittance();
 	};
 
-	// Updates the sound emittance as needed
 	Game_Event.prototype.updateSEmittance = function() {
 		if (this._sEmittance) {
 			if (!this._sEmittance.playing) {
-				this._sEmittance.play(true, 0);
+				this._sEmittance.play(true, 0); // true = loop
 				this._sEmittance.maxDistance = this._sEmittanceRadius || 1;
 			}
-			this._sEmittance.position = [this._realX - $gamePlayer._realX, this._realY - $gamePlayer._realY];
+			this._sEmittance.rawPosition = [this._realX - $gamePlayer._realX, this._realY - $gamePlayer._realY];
 		}
 	};
 
@@ -284,37 +355,31 @@ MBS.SoundEmittance = {};
 		this.refreshSEmittance();
 	}
 
-	// Adds the sound emittance to the playing list
 	Game_Event.prototype.refreshSEmittance = function() {
 		if (this._sEmittance) {
-			for (var i = 0; i < $_soundEmittances.length; i++)
-				if ($_soundEmittances[i]._evEmittance == this._sEmittance) return;
+			if ($_soundEmittances.some(e => e._evEmittance === this._sEmittance)) return;
+
 			var emittance = new WebAudio(this._sEmittance.filename);
 			emittance._evEmittance = this._sEmittance;
-
 			emittance.volume = this._sEmittance.volume;
 			emittance.pitch = this._sEmittance.pitch;
+			emittance._hasStarted = false; // Add state flag
 			
 			$_soundEmittances.push(emittance);
 		}
 	};
 
-	// Stops the sound emittance
 	Game_Event.prototype.stopSEmittance = function() {
-		if (this._sEmittance)
-			this._sEmittance.stop();
+		if (this._sEmittance) this._sEmittance.stop();
 	};
 
 	//-----------------------------------------------------------------------------
 	// Game_Map
 	//
-
 	var Game_Map_setupEvents = Game_Map.prototype.setupEvents;
 
 	Game_Map.prototype.setupEvents = function() {
-		$_soundEmittances.forEach(function(e) {
-			e.stop();
-		});
+		$_soundEmittances.forEach(e => e.stop());
 		$_soundEmittances = [];
 	    Game_Map_setupEvents.apply(this, arguments);
 	};
@@ -322,32 +387,60 @@ MBS.SoundEmittance = {};
 	//-----------------------------------------------------------------------------
 	// Scene_Map
 	//
-	var Scene_Map_update    = Scene_Map.prototype.update;
+	var Scene_Map_update_old    = Scene_Map.prototype.update;
 	var Scene_Map_start     = Scene_Map.prototype.start;
 	var Scene_Map_terminate = Scene_Map.prototype.terminate;
 
 	Scene_Map.prototype.update = function() {
-		Scene_Map_update.apply(this, arguments);
-		$_soundEmittances.forEach(function(emittance) {
-			if ($.Param.use3D) 
-				emittance.position = emittance._evEmittance.position;
-			else 
-			{
-				var dx = emittance._evEmittance.position[0], 
-					dy = emittance._evEmittance.position[1];
-				var distance = Math.sqrt(dx*dx + dy*dy);
-				emittance.volume = emittance._evEmittance.volume * (emittance._evEmittance.maxDistance - distance) / emittance._evEmittance.maxDistance;
+		Scene_Map_update_old.apply(this, arguments);
+		
+		const playerAngle = $.getPlayerAngle();
+		const smoothing = $.Param.smoothingFactor;
+
+		for (let i = $_soundEmittances.length - 1; i >= 0; i--) {
+			const emittance = $_soundEmittances[i];
+			const source = emittance._evEmittance;
+
+			if (!source.playing) {
+				emittance.stop();
+				$_soundEmittances.splice(i, 1);
+				continue;
 			}
-			if (emittance.isPlaying()) {
-				if (!emittance._evEmittance.playing) {
-					emittance.stop();
-					$_soundEmittances.splice($_soundEmittances.indexOf(emittance), 1);
+			
+			const dx = source.rawPosition[0];
+			const dy = source.rawPosition[1];
+			
+			const distance = Math.sqrt(dx*dx + dy*dy);
+			const maxDist = source.maxDistance > 0 ? source.maxDistance : 1;
+			const targetVolume = source.volume * Math.max(0, (maxDist - distance) / maxDist);
+			let targetPosition = [0, 0, 0];
+
+			if ($.Param.use3D) {
+				const coords = $.transformCoordinates(dx, dy, playerAngle);
+				targetPosition = [coords.x, 0, coords.z];
+			}
+			
+			// --- STATE LOGIC FIX ---
+			if (!emittance._hasStarted && emittance.isReady()) {
+				// State 1: First time playing. Snap to values and start.
+				emittance._hasStarted = true;
+				emittance.volume = targetVolume;
+				if ($.Param.use3D) emittance.position = targetPosition;
+
+				emittance.play.apply(emittance, source.playParameters);
+				if (emittance._pannerNode) {
+					emittance._pannerNode.maxDistance = source.maxDistance;
 				}
-			} else if (emittance && emittance.isReady()) {
-				emittance.play.apply(emittance, emittance._evEmittance.playParameters);
-				emittance._pannerNode.maxDistance = emittance._evEmittance.maxDistance;
+			} else if (emittance._hasStarted && emittance.isPlaying()) {
+				// State 2: Already playing. Smoothly update values.
+				emittance.volume = lerp(emittance.volume, targetVolume, smoothing);
+				if ($.Param.use3D) {
+					const newX = lerp(emittance.position[0], targetPosition[0], smoothing);
+					const newZ = lerp(emittance.position[2], targetPosition[2], smoothing);
+					emittance.position = [newX, 0, newZ];
+				}
 			}
-		});
+		}
 	}
 
 	Scene_Map.prototype.start = function() {
@@ -357,9 +450,7 @@ MBS.SoundEmittance = {};
 
 	Scene_Map.prototype.terminate = function() {
 		Scene_Map_terminate.apply(this, arguments);
-		$_soundEmittances.forEach(function(emittance) {
-			emittance.stop();
-		});
+		$_soundEmittances.forEach(e => e.stop());
 		$_soundEmittances = [];
 	}
 
@@ -367,11 +458,11 @@ MBS.SoundEmittance = {};
 
 // Registering the plugin
 if (Imported["MVCommons"]) {
- 	PluginManager.register("MBS_SoundEmittance", 1.2, "Allows you to set an sound emittance for events", {  
+ 	PluginManager.register("MBS_SoundEmittance", 1.6, "Allows you to set a sound emittance for events with smooth, interpolated 8-directional 3D positioning.", {  
      	email: "masked.rpg@gmail.com",
     	name: "Masked", 
  	    website: "N/A"
-    }, "2015-07-26");
+    }, "2023-10-27");
 } else {
-	Imported.MBS_SoundEmittance = 1.2;
+	Imported.MBS_SoundEmittance = 1.6;
 }
